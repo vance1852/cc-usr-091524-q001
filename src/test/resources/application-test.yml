@@ -1,0 +1,31 @@
+server:
+  port: 0
+
+spring:
+  datasource:
+    url: jdbc:h2:mem:sched_test;MODE=MySQL;DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE
+    username: sa
+    password: ""
+    driver-class-name: org.h2.Driver
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.H2Dialect
+    open-in-view: false
+
+app:
+  jwt-secret: test-secret-0123456789-0123456789-0123456789
+  admin-username: admin
+  admin-password: admin123
+  schedule:
+    enabled: false
+    zone: Asia/Shanghai
+    poll-interval-ms: 3600000
+    run-on-startup: false
+    recovery-hours: 72
+    late-generate-minutes: 180
+    claim-stale-minutes: 5
+    max-attempts: 5
+    batch-size: 200

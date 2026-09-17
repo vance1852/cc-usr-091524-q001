@@ -29,6 +29,14 @@ public class InspectionPlan {
     @Column(name = "shift_type", length = 16)
     private String shiftType = "day";
 
+    /** weekly 使用：ISO 周几（1=周一 … 7=周日），默认周一。 */
+    @Column(name = "day_of_week")
+    private Integer dayOfWeek = 1;
+
+    /** monthly 使用：几号（1-31），超出当月长度时按规则落到当月最后一天，默认 1 号。 */
+    @Column(name = "day_of_month")
+    private Integer dayOfMonth = 1;
+
     @Column(name = "start_time", length = 8)
     private String startTime = "08:00";
 
@@ -50,6 +58,10 @@ public class InspectionPlan {
     @Column
     private Boolean enabled = true;
 
+    /** 最近一次禁用时刻（由调度服务维护），用于重新启用时判定禁用区间。 */
+    @Column(name = "disabled_at")
+    private LocalDateTime disabledAt;
+
     @Column(name = "last_generated_at")
     private LocalDateTime lastGeneratedAt;
 
@@ -70,6 +82,10 @@ public class InspectionPlan {
     public void setCycleValue(Integer cycleValue) { this.cycleValue = cycleValue; }
     public String getShiftType() { return shiftType; }
     public void setShiftType(String shiftType) { this.shiftType = shiftType; }
+    public Integer getDayOfWeek() { return dayOfWeek; }
+    public void setDayOfWeek(Integer dayOfWeek) { this.dayOfWeek = dayOfWeek; }
+    public Integer getDayOfMonth() { return dayOfMonth; }
+    public void setDayOfMonth(Integer dayOfMonth) { this.dayOfMonth = dayOfMonth; }
     public String getStartTime() { return startTime; }
     public void setStartTime(String startTime) { this.startTime = startTime; }
     public String getEndTime() { return endTime; }
@@ -84,6 +100,8 @@ public class InspectionPlan {
     public void setRemark(String remark) { this.remark = remark; }
     public Boolean getEnabled() { return enabled; }
     public void setEnabled(Boolean enabled) { this.enabled = enabled; }
+    public LocalDateTime getDisabledAt() { return disabledAt; }
+    public void setDisabledAt(LocalDateTime disabledAt) { this.disabledAt = disabledAt; }
     public LocalDateTime getLastGeneratedAt() { return lastGeneratedAt; }
     public void setLastGeneratedAt(LocalDateTime lastGeneratedAt) { this.lastGeneratedAt = lastGeneratedAt; }
     public LocalDateTime getCreatedAt() { return createdAt; }

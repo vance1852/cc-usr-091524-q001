@@ -3,6 +3,7 @@ package com.admin.equipment.web.inspection;
 import com.admin.equipment.model.WorkOrder;
 import com.admin.equipment.model.inspection.*;
 import com.admin.equipment.service.inspection.InspectionTaskService;
+import com.admin.equipment.service.inspection.schedule.InspectionScheduleService;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -16,9 +17,12 @@ import java.util.Map;
 public class InspectionTaskController {
 
     private final InspectionTaskService service;
+    private final InspectionScheduleService scheduleService;
 
-    public InspectionTaskController(InspectionTaskService service) {
+    public InspectionTaskController(InspectionTaskService service,
+                                     InspectionScheduleService scheduleService) {
         this.service = service;
+        this.scheduleService = scheduleService;
     }
 
     public record GenerateRequest(Long planId, Long assigneeId, String assigneeName,
@@ -94,10 +98,12 @@ public class InspectionTaskController {
                 return ResponseEntity.unprocessableEntity().body(Map.of("detail", "计划ID必填"));
             }
             boolean useOpt = req.useOptimizedRoute() == null || Boolean.TRUE.equals(req.useOptimizedRoute());
-            InspectionTask t = service.generateTask(req.planId(), req.assigneeId(),
-                    req.assigneeName(), useOpt, req.startPointId());
+            // 统一走调度身份：当前周期已生成则拒绝，已跳过提示走补齐接口，
+            // 与自动轮询/多实例共用同一原子认领，避免手工与调度重复发任务
+            InspectionTask t = scheduleService.triggerNow(req.planId(), null,
+                    req.assigneeId(), req.assigneeName(), useOpt, req.startPointId());
             return ResponseEntity.status(HttpStatus.CREATED).body(t);
-        } catch (Exception e) {
+        } catch (IllegalStateException | IllegalArgumentException e) {
             return ResponseEntity.unprocessableEntity().body(Map.of("detail", e.getMessage()));
         }
     }

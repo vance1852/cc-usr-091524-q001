@@ -80,6 +80,11 @@ public class InspectionPlanController {
             return service.getById(id)
                     .<ResponseEntity<?>>map(ResponseEntity::ok)
                     .orElseGet(() -> ResponseEntity.status(HttpStatus.NOT_FOUND).build());
+        } catch (IllegalStateException e) {
+            // 重新启用禁用计划必须显式选择 continue / backfill
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of(
+                    "detail", e.getMessage(),
+                    "reactivateEndpoint", "/api/inspection/schedules/plans/" + id + "/reactivate"));
         } catch (IllegalArgumentException e) {
             return ResponseEntity.unprocessableEntity().body(Map.of("detail", e.getMessage()));
         }

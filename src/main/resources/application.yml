@@ -22,3 +22,15 @@ app:
   jwt-secret: ${JWT_SECRET:equipment-maintenance-admin-dev-secret-change-me-please-32bytes}
   admin-username: ${ADMIN_USERNAME:admin}
   admin-password: ${ADMIN_PASSWORD:admin123}
+  schedule:
+    enabled: ${SCHEDULE_ENABLED:true}
+    zone: ${SCHEDULE_ZONE:Asia/Shanghai}
+    poll-interval-ms: ${SCHEDULE_POLL_MS:60000}
+    run-on-startup: true
+    recovery-hours: 72
+    late-generate-minutes: 180
+    claim-stale-minutes: 5
+    max-attempts: 5
+    batch-size: 200
+    backfill-limit-default: 50
+    backfill-limit-max: 500

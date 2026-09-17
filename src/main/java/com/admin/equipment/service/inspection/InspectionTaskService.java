@@ -108,9 +108,6 @@ public class InspectionTaskService {
             throw new IllegalArgumentException("该计划已禁用");
         }
 
-        InspectionTemplate template = templateRepo.findById(plan.getTemplateId())
-                .orElseThrow(() -> new IllegalArgumentException("计划模板不存在"));
-
         LocalDateTime now = LocalDateTime.now();
         LocalDate today = now.toLocalDate();
         LocalDateTime winStart = parseTime(today, plan.getStartTime());
@@ -120,11 +117,32 @@ public class InspectionTaskService {
         } else {
             winEnd = parseTime(today, plan.getEndTime());
         }
+        return generateTaskForWindow(plan, assigneeId, assigneeName, useOptimizedRoute, startPointId,
+                winStart, winEnd, now, null, null, "manual", null);
+    }
 
-        String code = "TK-" + plan.getCode() + "-" + now.format(DateTimeFormatter.ofPattern("yyyyMMddHHmm"));
+    /**
+     * 调度内核：按指定周期窗口生成任务。periodKey/occurrenceId 记录触发周期与生成实例，
+     * code 携带 periodKey，使同一周期在任何触发来源下都具备确定性身份。
+     */
+    @Transactional
+    public InspectionTask generateTaskForWindow(InspectionPlan plan, Long assigneeId, String assigneeName,
+                                                  boolean useOptimizedRoute, Long startPointId,
+                                                  LocalDateTime winStart, LocalDateTime winEnd,
+                                                  LocalDateTime generatedAt,
+                                                  Long occurrenceId, String periodKey,
+                                                  String triggerSource, String codeSuffix) {
+        LocalDateTime now = generatedAt != null ? generatedAt : LocalDateTime.now();
+
+        String identity = periodKey != null ? periodKey : now.format(DateTimeFormatter.ofPattern("yyyyMMddHHmm"));
+        String suffix = codeSuffix == null || codeSuffix.isBlank() ? "" : "-" + codeSuffix;
+        String code = "TK-" + plan.getCode() + "-" + identity + suffix;
 
         InspectionTask task = new InspectionTask();
-        task.setPlanId(planId);
+        task.setPlanId(plan.getId());
+        task.setOccurrenceId(occurrenceId);
+        task.setPeriodKey(periodKey);
+        task.setTriggerSource(triggerSource == null ? "manual" : triggerSource);
         task.setCode(code);
         task.setTemplateId(plan.getTemplateId());
         task.setStatus("pending");
@@ -135,8 +153,8 @@ public class InspectionTaskService {
         task.setTeamName(plan.getTeamName());
         task.setRouteType(useOptimizedRoute ? "optimized" : "sequential");
 
-        RouteResult route = planService.planRouteForExecution(planId, startPointId, useOptimizedRoute);
-        InspectionPlanService.RouteCompareResult compare = planService.compareRoutes(planId);
+        RouteResult route = planService.planRouteForExecution(plan.getId(), startPointId, useOptimizedRoute);
+        InspectionPlanService.RouteCompareResult compare = planService.compareRoutes(plan.getId());
 
         task.setRouteDistance(route.totalDistance);
         task.setSequentialDistance(compare.sequential().totalDistance);

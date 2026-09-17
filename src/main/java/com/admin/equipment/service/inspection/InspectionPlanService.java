@@ -9,6 +9,8 @@ import com.admin.equipment.repo.inspection.InspectionPlanRepository;
 import com.admin.equipment.repo.inspection.InspectionPointRepository;
 import com.admin.equipment.repo.inspection.InspectionTemplateRepository;
 import com.admin.equipment.service.inspection.RoutePlanningService.*;
+import com.admin.equipment.service.inspection.schedule.InspectionScheduleService;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -22,17 +24,20 @@ public class InspectionPlanService {
     private final InspectionTemplateRepository templateRepo;
     private final InspectionPointRepository pointRepo;
     private final RoutePlanningService routeService;
+    private final InspectionScheduleService scheduleService;
 
     public InspectionPlanService(InspectionPlanRepository planRepo,
                                   InspectionPlanPointRepository planPointRepo,
                                   InspectionTemplateRepository templateRepo,
                                   InspectionPointRepository pointRepo,
-                                  RoutePlanningService routeService) {
+                                  RoutePlanningService routeService,
+                                  @Lazy InspectionScheduleService scheduleService) {
         this.planRepo = planRepo;
         this.planPointRepo = planPointRepo;
         this.templateRepo = templateRepo;
         this.pointRepo = pointRepo;
         this.routeService = routeService;
+        this.scheduleService = scheduleService;
     }
 
     public List<InspectionPlan> listAll() {
@@ -64,7 +69,8 @@ public class InspectionPlanService {
     }
 
     public record PlanSpec(String code, String name, Long templateId, String cycleType, Integer cycleValue,
-                           String shiftType, String startTime, String endTime, Integer timeWindowMinutes,
+                           String shiftType, Integer dayOfWeek, Integer dayOfMonth,
+                           String startTime, String endTime, Integer timeWindowMinutes,
                            String teamName, String assigneeIds, String remark, List<Long> pointIds) {}
 
     @Transactional
@@ -83,6 +89,8 @@ public class InspectionPlanService {
         plan.setCycleType(validCycle(spec.cycleType()));
         plan.setCycleValue(spec.cycleValue() == null ? 1 : Math.max(1, spec.cycleValue()));
         plan.setShiftType(spec.shiftType() == null ? "day" : spec.shiftType());
+        plan.setDayOfWeek(spec.dayOfWeek() == null ? 1 : Math.max(1, Math.min(7, spec.dayOfWeek())));
+        plan.setDayOfMonth(spec.dayOfMonth() == null ? 1 : Math.max(1, Math.min(31, spec.dayOfMonth())));
         plan.setStartTime(spec.startTime() == null ? "08:00" : spec.startTime());
         plan.setEndTime(spec.endTime() == null ? "18:00" : spec.endTime());
         plan.setTimeWindowMinutes(spec.timeWindowMinutes() == null ? 120 : spec.timeWindowMinutes());
@@ -116,6 +124,8 @@ public class InspectionPlanService {
         if (spec.cycleType() != null) plan.setCycleType(validCycle(spec.cycleType()));
         if (spec.cycleValue() != null) plan.setCycleValue(Math.max(1, spec.cycleValue()));
         if (spec.shiftType() != null) plan.setShiftType(spec.shiftType());
+        if (spec.dayOfWeek() != null) plan.setDayOfWeek(Math.max(1, Math.min(7, spec.dayOfWeek())));
+        if (spec.dayOfMonth() != null) plan.setDayOfMonth(Math.max(1, Math.min(31, spec.dayOfMonth())));
         if (spec.startTime() != null) plan.setStartTime(spec.startTime());
         if (spec.endTime() != null) plan.setEndTime(spec.endTime());
         if (spec.timeWindowMinutes() != null) plan.setTimeWindowMinutes(spec.timeWindowMinutes());
@@ -141,7 +151,16 @@ public class InspectionPlanService {
     public void setEnabled(Long id, boolean enabled) {
         InspectionPlan plan = planRepo.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException("计划不存在"));
-        plan.setEnabled(enabled);
+        if (!enabled) {
+            // 统一走调度禁用逻辑：登记禁用时刻并把未发生的周期标记为“禁用不补发”
+            scheduleService.disablePlan(id);
+            return;
+        }
+        if (Boolean.FALSE.equals(plan.getEnabled()) && plan.getDisabledAt() != null) {
+            // 重新启用必须显式选择 continue / backfill，见 InspectionScheduleService.reactivatePlan
+            throw new IllegalStateException("计划处于禁用状态，重新启用须明确选择从当前周期继续(continue)或补齐历史(backfill)");
+        }
+        plan.setEnabled(true);
         planRepo.save(plan);
     }
 

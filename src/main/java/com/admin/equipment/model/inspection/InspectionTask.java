@@ -14,6 +14,18 @@ public class InspectionTask {
     @Column(name = "plan_id", nullable = false)
     private Long planId;
 
+    /** 对应的调度周期生成实例（巡检调度身份），手工补录的历史任务可能为空。 */
+    @Column(name = "occurrence_id")
+    private Long occurrenceId;
+
+    /** 触发周期键，如 20260917 / 2026W38 / 202609 / 202609171400 / 20260917-NIGHT。 */
+    @Column(name = "period_key", length = 32)
+    private String periodKey;
+
+    /** scheduler（轮询/重启补偿）、manual（立即执行）、backfill（补齐）。 */
+    @Column(name = "trigger_source", length = 16)
+    private String triggerSource;
+
     @Column(nullable = false, length = 64)
     private String code;
 
@@ -84,6 +96,12 @@ public class InspectionTask {
     public void setId(Long id) { this.id = id; }
     public Long getPlanId() { return planId; }
     public void setPlanId(Long planId) { this.planId = planId; }
+    public Long getOccurrenceId() { return occurrenceId; }
+    public void setOccurrenceId(Long occurrenceId) { this.occurrenceId = occurrenceId; }
+    public String getPeriodKey() { return periodKey; }
+    public void setPeriodKey(String periodKey) { this.periodKey = periodKey; }
+    public String getTriggerSource() { return triggerSource; }
+    public void setTriggerSource(String triggerSource) { this.triggerSource = triggerSource; }
     public String getCode() { return code; }
     public void setCode(String code) { this.code = code; }
     public Long getTemplateId() { return templateId; }
