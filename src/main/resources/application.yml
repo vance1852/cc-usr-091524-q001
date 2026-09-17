@@ -22,3 +22,13 @@ app:
   jwt-secret: ${JWT_SECRET:equipment-maintenance-admin-dev-secret-change-me-please-32bytes}
   admin-username: ${ADMIN_USERNAME:admin}
   admin-password: ${ADMIN_PASSWORD:admin123}
+  schedule:
+    # 厂区时区，周期时刻与跨午夜/夏令时规则均按此时区解释
+    zone: ${SCHEDULE_ZONE:Asia/Shanghai}
+    # 自动调度总开关，多实例部署可全部开启（唯一索引保证不重复），停机维护时可关
+    enabled: ${SCHEDULE_ENABLED:true}
+    # 轮询间隔（毫秒）
+    poll-interval-ms: ${SCHEDULE_POLL_INTERVAL_MS:60000}
+    poll-initial-delay-ms: ${SCHEDULE_POLL_INITIAL_DELAY_MS:15000}
+    # 单次扫描允许补发的历史周期上限，更早的漏发周期仅留痕 SKIPPED
+    backfill-max: ${SCHEDULE_BACKFILL_MAX:200}

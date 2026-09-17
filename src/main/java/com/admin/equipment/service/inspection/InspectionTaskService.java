@@ -3,12 +3,17 @@ package com.admin.equipment.service.inspection;
 import com.admin.equipment.model.Equipment;
 import com.admin.equipment.model.WorkOrder;
 import com.admin.equipment.model.inspection.*;
+import com.admin.equipment.repo.AppUserRepository;
 import com.admin.equipment.repo.EquipmentRepository;
 import com.admin.equipment.repo.WorkOrderRepository;
 import com.admin.equipment.repo.inspection.*;
 import com.admin.equipment.service.inspection.InspectionTemplateService.JudgeResult;
 import com.admin.equipment.service.inspection.RoutePlanningService.RoutePoint;
 import com.admin.equipment.service.inspection.RoutePlanningService.RouteResult;
+import com.admin.equipment.service.inspection.schedule.CycleScheduleCalculator;
+import com.admin.equipment.service.inspection.schedule.ScheduleClock;
+import com.admin.equipment.service.inspection.schedule.ScheduledTaskGenerator;
+import com.admin.equipment.service.inspection.schedule.CycleScheduleCalculator.PeriodInstance;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -17,7 +22,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.*;
 
 @Service
-public class InspectionTaskService {
+public class InspectionTaskService implements ScheduledTaskGenerator {
 
     private final InspectionTaskRepository taskRepo;
     private final InspectionTaskPointRepository taskPointRepo;
@@ -29,8 +34,11 @@ public class InspectionTaskService {
     private final InspectionPointRepository pointRepo;
     private final EquipmentRepository equipmentRepo;
     private final WorkOrderRepository workOrderRepo;
+    private final AppUserRepository userRepo;
     private final InspectionTemplateService templateService;
     private final InspectionPlanService planService;
+    private final CycleScheduleCalculator calculator;
+    private final ScheduleClock clock;
 
     public InspectionTaskService(InspectionTaskRepository taskRepo,
                                  InspectionTaskPointRepository taskPointRepo,
@@ -42,8 +50,11 @@ public class InspectionTaskService {
                                  InspectionPointRepository pointRepo,
                                  EquipmentRepository equipmentRepo,
                                  WorkOrderRepository workOrderRepo,
+                                 AppUserRepository userRepo,
                                  InspectionTemplateService templateService,
-                                 InspectionPlanService planService) {
+                                 InspectionPlanService planService,
+                                 CycleScheduleCalculator calculator,
+                                 ScheduleClock clock) {
         this.taskRepo = taskRepo;
         this.taskPointRepo = taskPointRepo;
         this.recordRepo = recordRepo;
@@ -54,8 +65,11 @@ public class InspectionTaskService {
         this.pointRepo = pointRepo;
         this.equipmentRepo = equipmentRepo;
         this.workOrderRepo = workOrderRepo;
+        this.userRepo = userRepo;
         this.templateService = templateService;
         this.planService = planService;
+        this.calculator = calculator;
+        this.clock = clock;
     }
 
     public List<InspectionTask> listAll() {
@@ -111,20 +125,68 @@ public class InspectionTaskService {
         InspectionTemplate template = templateRepo.findById(plan.getTemplateId())
                 .orElseThrow(() -> new IllegalArgumentException("计划模板不存在"));
 
-        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime now = clock.now();
         LocalDate today = now.toLocalDate();
         LocalDateTime winStart = parseTime(today, plan.getStartTime());
         LocalDateTime winEnd;
         if (plan.getTimeWindowMinutes() != null) {
             winEnd = winStart.plusMinutes(plan.getTimeWindowMinutes());
         } else {
-            winEnd = parseTime(today, plan.getEndTime());
+            LocalDate endDate = today;
+            LocalTime endT = parseTimeOnly(plan.getEndTime());
+            if (!endT.isAfter(winStart.toLocalTime())) endDate = endDate.plusDays(1);
+            winEnd = LocalDateTime.of(endDate, endT);
         }
 
         String code = "TK-" + plan.getCode() + "-" + now.format(DateTimeFormatter.ofPattern("yyyyMMddHHmm"));
+        InspectionTask saved = buildTask(plan, code, winStart, winEnd, assigneeId, assigneeName,
+                useOptimizedRoute, startPointId, null, null, InspectionScheduleLedger.SOURCE_MANUAL, now);
 
+        plan.setLastGeneratedAt(now);
+        planRepo.save(plan);
+        return saved;
+    }
+
+    /**
+     * 调度入口：为确定的周期实例生成任务。由 InspectionScheduleService 在已抢占周期身份后、
+     * 与台账状态更新同一事务内调用，因此本方法不做启用校验、不更新 lastGeneratedAt
+     * （水位线以台账为准）。
+     */
+    @Override
+    @Transactional
+    public InspectionTask generateForPeriod(InspectionPlan plan, PeriodInstance period,
+                                             Long ledgerId, String triggerSource) {
+        if (templateRepo.findById(plan.getTemplateId()).isEmpty()) {
+            throw new IllegalArgumentException("计划模板不存在");
+        }
+        LocalDateTime now = clock.now();
+        CycleScheduleCalculator.Window window = calculator.windowOf(plan, period.scheduledAt());
+        Long assigneeId = defaultAssigneeId(plan);
+        String assigneeName = assigneeNameOf(assigneeId);
+        String code = "TK-" + plan.getCode() + "-"
+                + period.scheduledAt().format(DateTimeFormatter.ofPattern("yyyyMMddHHmm")) + "-" + period.index();
+        InspectionTask task = buildTask(plan, code, window.start(), window.end(), assigneeId, assigneeName,
+                true, null, ledgerId, period.key(), triggerSource, now);
+        plan.setLastGeneratedAt(now);
+        planRepo.save(plan);
+        return task;
+    }
+
+    @Override
+    public InspectionTask getTask(Long taskId) {
+        return taskRepo.findById(taskId)
+                .orElseThrow(() -> new IllegalArgumentException("任务不存在: " + taskId));
+    }
+
+    /** 任务组装核心：手工触发与周期调度共用，保证两条链路生成的任务结构一致。 */
+    private InspectionTask buildTask(InspectionPlan plan, String code,
+                                      LocalDateTime winStart, LocalDateTime winEnd,
+                                      Long assigneeId, String assigneeName,
+                                      boolean useOptimizedRoute, Long startPointId,
+                                      Long ledgerId, String periodKey, String triggerSource,
+                                      LocalDateTime now) {
         InspectionTask task = new InspectionTask();
-        task.setPlanId(planId);
+        task.setPlanId(plan.getId());
         task.setCode(code);
         task.setTemplateId(plan.getTemplateId());
         task.setStatus("pending");
@@ -134,9 +196,12 @@ public class InspectionTaskService {
         task.setAssigneeName(assigneeName == null ? "" : assigneeName);
         task.setTeamName(plan.getTeamName());
         task.setRouteType(useOptimizedRoute ? "optimized" : "sequential");
+        task.setScheduleLedgerId(ledgerId);
+        task.setPeriodKey(periodKey);
+        task.setTriggerSource(triggerSource);
 
-        RouteResult route = planService.planRouteForExecution(planId, startPointId, useOptimizedRoute);
-        InspectionPlanService.RouteCompareResult compare = planService.compareRoutes(planId);
+        RouteResult route = planService.planRouteForExecution(plan.getId(), startPointId, useOptimizedRoute);
+        InspectionPlanService.RouteCompareResult compare = planService.compareRoutes(plan.getId());
 
         task.setRouteDistance(route.totalDistance);
         task.setSequentialDistance(compare.sequential().totalDistance);
@@ -174,10 +239,27 @@ public class InspectionTaskService {
             tp.setStatus("pending");
             taskPointRepo.save(tp);
         }
-
-        plan.setLastGeneratedAt(now);
-        planRepo.save(plan);
         return savedTask;
+    }
+
+    private Long defaultAssigneeId(InspectionPlan plan) {
+        if (plan.getAssigneeIds() == null || plan.getAssigneeIds().isBlank()) return null;
+        for (String part : plan.getAssigneeIds().split(",")) {
+            try {
+                long id = Long.parseLong(part.trim());
+                if (id > 0) return id;
+            } catch (NumberFormatException ignored) {}
+        }
+        return null;
+    }
+
+    private String assigneeNameOf(Long id) {
+        if (id == null) return "";
+        return userRepo.findById(id).map(u -> u.getDisplayName() == null ? "" : u.getDisplayName()).orElse("");
+    }
+
+    private LocalTime parseTimeOnly(String timeStr) {
+        return parseTime(clock.now().toLocalDate(), timeStr).toLocalTime();
     }
 
     @Transactional
@@ -188,7 +270,7 @@ public class InspectionTaskService {
             throw new IllegalArgumentException("任务状态不合法，当前：" + task.getStatus());
         }
         task.setStatus("in_progress");
-        task.setActualStart(LocalDateTime.now());
+        task.setActualStart(clock.now());
         if (inspectorName != null && !inspectorName.isBlank()) {
             task.setAssigneeName(inspectorName);
         }
@@ -214,7 +296,7 @@ public class InspectionTaskService {
             throw new IllegalArgumentException("该巡检点已完成，禁止重复巡检");
         }
 
-        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime now = clock.now();
         boolean isFirst = tp.getArrivedAt() == null;
         if (isFirst) {
             tp.setArrivedAt(now);
@@ -344,7 +426,7 @@ public class InspectionTaskService {
 
     @Transactional
     public void detectMissedAndTimeout() {
-        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime now = clock.now();
         List<InspectionTask> inProgress = taskRepo.findByStatusOrderByCreatedAtDesc("in_progress");
         for (InspectionTask task : inProgress) {
             if (task.getScheduledEnd() != null && now.isAfter(task.getScheduledEnd())) {
@@ -430,12 +512,12 @@ public class InspectionTaskService {
         InspectionAbnormality ab = abnormalityRepo.findById(abnormalityId)
                 .orElseThrow(() -> new IllegalArgumentException("异常不存在"));
         ab.setRecheckResult(result);
-        ab.setRecheckAt(LocalDateTime.now());
+        ab.setRecheckAt(clock.now());
         ab.setRecheckBy(recheckBy == null ? "" : recheckBy);
         if ("passed".equals(result)) {
             ab.setStatus("resolved");
             ab.setClosedLoop(true);
-            ab.setResolvedAt(LocalDateTime.now());
+            ab.setResolvedAt(clock.now());
         } else if ("failed".equals(result)) {
             ab.setStatus("recheck_failed");
         } else {

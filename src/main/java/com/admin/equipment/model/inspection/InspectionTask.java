@@ -29,6 +29,18 @@ public class InspectionTask {
     @Column(name = "scheduled_end")
     private LocalDateTime scheduledEnd;
 
+    /** 自动调度来源台账ID，手工生成（非周期）为空。 */
+    @Column(name = "schedule_ledger_id")
+    private Long scheduleLedgerId;
+
+    /** 周期实例键，如 D20260917，便于从任务直接反查触发周期。 */
+    @Column(name = "period_key", length = 32)
+    private String periodKey;
+
+    /** 触发来源：POLL / STARTUP / MANUAL / RESUME。 */
+    @Column(name = "trigger_source", length = 16)
+    private String triggerSource;
+
     @Column(name = "actual_start")
     private LocalDateTime actualStart;
 
@@ -94,6 +106,12 @@ public class InspectionTask {
     public void setScheduledStart(LocalDateTime scheduledStart) { this.scheduledStart = scheduledStart; }
     public LocalDateTime getScheduledEnd() { return scheduledEnd; }
     public void setScheduledEnd(LocalDateTime scheduledEnd) { this.scheduledEnd = scheduledEnd; }
+    public Long getScheduleLedgerId() { return scheduleLedgerId; }
+    public void setScheduleLedgerId(Long scheduleLedgerId) { this.scheduleLedgerId = scheduleLedgerId; }
+    public String getPeriodKey() { return periodKey; }
+    public void setPeriodKey(String periodKey) { this.periodKey = periodKey; }
+    public String getTriggerSource() { return triggerSource; }
+    public void setTriggerSource(String triggerSource) { this.triggerSource = triggerSource; }
     public LocalDateTime getActualStart() { return actualStart; }
     public void setActualStart(LocalDateTime actualStart) { this.actualStart = actualStart; }
     public LocalDateTime getActualEnd() { return actualEnd; }

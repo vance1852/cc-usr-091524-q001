@@ -53,6 +53,18 @@ public class InspectionPlan {
     @Column(name = "last_generated_at")
     private LocalDateTime lastGeneratedAt;
 
+    /** 调度参数版本：周期类型/周期值/起始时刻变更后递增，旧版本台账保留用于追溯。 */
+    @Column(name = "schedule_version", nullable = false, columnDefinition = "int default 1")
+    private Integer scheduleVersion = 1;
+
+    /** 周期序列锚点（首个周期的日期/时刻据此推算），新建计划时写入。 */
+    @Column(name = "schedule_anchor")
+    private LocalDateTime scheduleAnchor;
+
+    /** 最近一次被禁用的时刻，重新启用后保留，用于界定禁用区间。 */
+    @Column(name = "disabled_at")
+    private LocalDateTime disabledAt;
+
     @Column(name = "created_at")
     private LocalDateTime createdAt = LocalDateTime.now();
 
@@ -86,6 +98,12 @@ public class InspectionPlan {
     public void setEnabled(Boolean enabled) { this.enabled = enabled; }
     public LocalDateTime getLastGeneratedAt() { return lastGeneratedAt; }
     public void setLastGeneratedAt(LocalDateTime lastGeneratedAt) { this.lastGeneratedAt = lastGeneratedAt; }
+    public Integer getScheduleVersion() { return scheduleVersion; }
+    public void setScheduleVersion(Integer scheduleVersion) { this.scheduleVersion = scheduleVersion; }
+    public LocalDateTime getScheduleAnchor() { return scheduleAnchor; }
+    public void setScheduleAnchor(LocalDateTime scheduleAnchor) { this.scheduleAnchor = scheduleAnchor; }
+    public LocalDateTime getDisabledAt() { return disabledAt; }
+    public void setDisabledAt(LocalDateTime disabledAt) { this.disabledAt = disabledAt; }
     public LocalDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
 }

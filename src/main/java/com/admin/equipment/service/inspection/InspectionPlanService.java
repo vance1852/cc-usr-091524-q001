@@ -3,15 +3,20 @@ package com.admin.equipment.service.inspection;
 import com.admin.equipment.model.inspection.InspectionPlan;
 import com.admin.equipment.model.inspection.InspectionPlanPoint;
 import com.admin.equipment.model.inspection.InspectionPoint;
+import com.admin.equipment.model.inspection.InspectionScheduleLedger;
 import com.admin.equipment.model.inspection.InspectionTemplate;
 import com.admin.equipment.repo.inspection.InspectionPlanPointRepository;
 import com.admin.equipment.repo.inspection.InspectionPlanRepository;
 import com.admin.equipment.repo.inspection.InspectionPointRepository;
+import com.admin.equipment.repo.inspection.InspectionScheduleLedgerRepository;
 import com.admin.equipment.repo.inspection.InspectionTemplateRepository;
 import com.admin.equipment.service.inspection.RoutePlanningService.*;
+import com.admin.equipment.service.inspection.schedule.CycleScheduleCalculator;
+import com.admin.equipment.service.inspection.schedule.ScheduleClock;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDateTime;
 import java.util.*;
 
 @Service
@@ -22,17 +27,26 @@ public class InspectionPlanService {
     private final InspectionTemplateRepository templateRepo;
     private final InspectionPointRepository pointRepo;
     private final RoutePlanningService routeService;
+    private final CycleScheduleCalculator calculator;
+    private final ScheduleClock clock;
+    private final InspectionScheduleLedgerRepository ledgerRepo;
 
     public InspectionPlanService(InspectionPlanRepository planRepo,
                                   InspectionPlanPointRepository planPointRepo,
                                   InspectionTemplateRepository templateRepo,
                                   InspectionPointRepository pointRepo,
-                                  RoutePlanningService routeService) {
+                                  RoutePlanningService routeService,
+                                  CycleScheduleCalculator calculator,
+                                  ScheduleClock clock,
+                                  InspectionScheduleLedgerRepository ledgerRepo) {
         this.planRepo = planRepo;
         this.planPointRepo = planPointRepo;
         this.templateRepo = templateRepo;
         this.pointRepo = pointRepo;
         this.routeService = routeService;
+        this.calculator = calculator;
+        this.clock = clock;
+        this.ledgerRepo = ledgerRepo;
     }
 
     public List<InspectionPlan> listAll() {
@@ -90,6 +104,8 @@ public class InspectionPlanService {
         plan.setAssigneeIds(spec.assigneeIds() == null ? "" : spec.assigneeIds());
         plan.setRemark(spec.remark() == null ? "" : spec.remark());
         plan.setEnabled(true);
+        plan.setScheduleVersion(1);
+        plan.setScheduleAnchor(calculator.normalizeAnchor(clock.now(), plan.getCycleType(), plan.getStartTime()));
         InspectionPlan saved = planRepo.save(plan);
 
         int seq = 1;
@@ -113,6 +129,10 @@ public class InspectionPlanService {
             if (!templateRepo.existsById(spec.templateId())) throw new IllegalArgumentException("模板不存在");
             plan.setTemplateId(spec.templateId());
         }
+        String oldCycle = plan.getCycleType();
+        Integer oldCycleValue = plan.getCycleValue();
+        String oldStart = plan.getStartTime();
+        String oldShift = plan.getShiftType();
         if (spec.cycleType() != null) plan.setCycleType(validCycle(spec.cycleType()));
         if (spec.cycleValue() != null) plan.setCycleValue(Math.max(1, spec.cycleValue()));
         if (spec.shiftType() != null) plan.setShiftType(spec.shiftType());
@@ -122,6 +142,18 @@ public class InspectionPlanService {
         if (spec.teamName() != null) plan.setTeamName(spec.teamName());
         if (spec.assigneeIds() != null) plan.setAssigneeIds(spec.assigneeIds());
         if (spec.remark() != null) plan.setRemark(spec.remark());
+
+        // 周期参数（类型/步长/班次/起始时刻）变更：递增调度版本并以当前时刻重置锚点，
+        // 新序列从当前周期开始，历史台账保留在旧版本下可追溯，不会与新周期键冲突。
+        boolean scheduleChanged = !Objects.equals(oldCycle, plan.getCycleType())
+                || !Objects.equals(oldCycleValue, plan.getCycleValue())
+                || !Objects.equals(oldShift, plan.getShiftType())
+                || !Objects.equals(oldStart, plan.getStartTime());
+        if (scheduleChanged) {
+            int v = plan.getScheduleVersion() == null ? 1 : plan.getScheduleVersion();
+            plan.setScheduleVersion(v + 1);
+            plan.setScheduleAnchor(calculator.normalizeAnchor(clock.now(), plan.getCycleType(), plan.getStartTime()));
+        }
         if (spec.pointIds() != null && !spec.pointIds().isEmpty()) {
             planPointRepo.deleteByPlanId(id);
             int seq = 1;
@@ -141,7 +173,53 @@ public class InspectionPlanService {
     public void setEnabled(Long id, boolean enabled) {
         InspectionPlan plan = planRepo.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException("计划不存在"));
-        plan.setEnabled(enabled);
+        boolean wasDisabled = Boolean.FALSE.equals(plan.getEnabled());
+        LocalDateTime now = clock.now();
+        if (!enabled) {
+            plan.setEnabled(false);
+            plan.setDisabledAt(now);
+            planRepo.save(plan);
+            return;
+        }
+        if (wasDisabled) {
+            // 直接重新启用：默认“从当前周期继续”。从本版本水位线枚举，禁用前已到期但从未
+            // 扫描的周期也一并确定性留痕，之后轮询不会把这段历史整段补发；
+            // 需要补齐历史请走 /schedule/resume(BACKFILL)。
+            int version = plan.getScheduleVersion() == null ? 1 : plan.getScheduleVersion();
+            LocalDateTime enumerateFrom = ledgerRepo
+                    .findByPlanIdAndScheduleVersionOrderByScheduledAtDesc(
+                            id, version, org.springframework.data.domain.PageRequest.of(0, 1))
+                    .stream().findFirst().map(InspectionScheduleLedger::getScheduledAt)
+                    .orElseGet(() -> calculator.resolveAnchor(plan));
+            long currentIndex = calculator.indexAt(plan, now);
+            for (var pi : calculator.enumerate(plan, enumerateFrom, now)) {
+                if (pi.index() >= currentIndex) continue;
+                boolean exists = ledgerRepo
+                        .findByPlanIdAndScheduleVersionAndPeriodKey(id, version, pi.key()).isPresent();
+                if (exists) continue;
+                InspectionScheduleLedger l = new InspectionScheduleLedger();
+                l.setPlanId(id);
+                l.setScheduleVersion(version);
+                l.setPeriodKey(pi.key());
+                l.setCycleType(pi.cycleType());
+                l.setPeriodIndex(pi.index());
+                l.setScheduledAt(pi.scheduledAt());
+                l.setFiredAt(now);
+                l.setStatus(InspectionScheduleLedger.STATUS_SKIPPED);
+                l.setSkipReason(InspectionScheduleLedger.REASON_DISABLED);
+                l.setMessage("计划禁用期间到期，直接重新启用（默认从当前周期继续，不补发）");
+                l.setTriggerSource(InspectionScheduleLedger.SOURCE_RESUME);
+                l.setCreatedAt(now);
+                l.setUpdatedAt(now);
+                try {
+                    ledgerRepo.saveAndFlush(l);
+                } catch (Exception ignored) {
+                    // 并发占用（例如其他节点同时操作）时以已有记录为准。
+                }
+            }
+        }
+        plan.setEnabled(true);
+        plan.setDisabledAt(null);
         planRepo.save(plan);
     }
 

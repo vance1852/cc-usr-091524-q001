@@ -1,0 +1,35 @@
+server:
+  port: 0
+
+spring:
+  datasource:
+    url: jdbc:h2:mem:sched-test;MODE=MySQL;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
+    username: sa
+    password: ""
+    driver-class-name: org.h2.Driver
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.H2Dialect
+    open-in-view: false
+
+app:
+  jwt-secret: test-secret-test-secret-test-secret-32bytes
+  admin-username: admin
+  admin-password: admin123
+  seed:
+    enabled: false
+  schedule:
+    zone: Asia/Shanghai
+    enabled: false
+    poll-interval-ms: 3600000
+    poll-initial-delay-ms: 3600000
+    backfill-max: 200
+
+logging:
+  level:
+    # 并发测试会故意触发唯一索引/乐观锁冲突，这些是被捕获并处理的预期异常
+    com.admin.equipment.service.inspection.schedule.InspectionScheduleService: WARN
+    org.hibernate.engine.jdbc.spi.SqlExceptionHelper: OFF
